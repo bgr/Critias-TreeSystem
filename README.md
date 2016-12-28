@@ -7,6 +7,21 @@ Would you like to see how it looks in a real game? Check out ['The Unwritten Cri
 The Critias tree system is an Unity addition that is used for an, currently in-development, open-world quest named 'The Unwritten Critias'. It was developed due to the poor
 performance of the Unity's built-in SpeedTree implementation.
 
+Features:
+- Support for 100k+ tress with collisions
+- Painting trees on non-terrains
+- Being able to completely remove the terrain after editing the trees
+- Support for multiple tree types
+- CullingGroup API for cells
+- Instancing support
+- Tillable terrain support
+- Billboard rotation
+- Tree Y rotation
+- Tree wind
+- LOD System
+- Animated SpeedTree style CrossFade
+- Uber-fast billboard system with 400+ FPS at 200k+ trees
+
 ! IMPORTANT !
 At runtime the managed terain's trees and foliage is turned off, so your terrain's grass will go away. In order to mitigate that I would recommend having two terrains, one for trees and the other for grass. A script, 'TerrainUtility' for that usage has been added.
 
