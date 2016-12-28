@@ -2,6 +2,8 @@ Critias Tree System
 
 ![alt tag](https://github.com/AssemblyJohn/Critias-TreeSystem/blob/master/CritiasTree.png)
 
+[Absolute README link](http://www.unwrittencritias.com)
+
 The Critias tree system is an Unity addition that is used for an, currently in-development, open-world quest named 'The Unwritten Critias'. It was developed due to the poor
 performance of the Unity's built-in SpeedTree implementation.
 
