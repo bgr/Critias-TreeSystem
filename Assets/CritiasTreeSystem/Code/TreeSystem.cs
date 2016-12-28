@@ -6,6 +6,10 @@ using System.Collections.Generic;
 
 using UnityEngine;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 [System.Serializable]
 public struct TreeSystemStoredInstance
 {
@@ -146,20 +150,82 @@ public class TreeSystemTerrain
 [System.Serializable]
 public class TreeSystemSettings
 {
+    [Range(0, 2000f)]
     public float m_MaxTreeDistance = 300;
+
+    [Space(20)]
+    [Header("Shadow")]
+
+    [Tooltip("If we should apply shadow popping correction. Will make sure that trees that are within the shadow distance are drawn as shadow-only even if they are invisible")]
+    public bool m_ApplyShadowPoppingCorrection = true;
+    // Even if invisible, trees that are at a distance smaller than this one will be drawn 'ShadowsOnly'
+    // Used to mitigate the shadow popping, until we'll have a decent shadow-caster culling algorithm
+    [Range(0, 2000f)]
+    public float m_ShadowDrawDistance = 50;
+
+    [Space(20)]
+    [Header("Collsion")]
+
+    [Tooltip("If we should apply tree collision and not use the default terrain one")]
+    public bool m_ApplyTreeColliders = true;
+    // After how many meters the 'TreeColliders' transform moves we refresh the colliders
+    [Range(0, 2000f)]
+    public float m_ColliderRefreshDistance = 5;
+    // Trees at what distance around us will have collisions
+    [Range(0, 2000f)]
+    public float m_ColliderSetDistance = 20;
+
+    [Space(20)]
+    [Header("Rendering")]    
+
+    [Tooltip("Defaults to 'Default'")]
+    public string m_UsedLayer = "Default";
+    [Tooltip("Defaults to 'Camera.main' for occlsion culling")]
+    public Camera m_UsedCamera;
+    [Tooltip("If we should use geometry instancing")]
+    public bool m_UseInstancing = true;
 
     // 5 meters when we're fading between LOD levels
     public float m_LODTranzitionThreshold = 5.0f;
     public float m_LODFadeSpeed = 5.0f;
 }
 
+#if UNITY_EDITOR
+
+[CustomEditor(typeof(TreeSystem))]
+public class TreeSystemEditor : Editor
+{    
+    public override void OnInspectorGUI()
+    {
+        DrawDefaultInspector();
+
+        TreeSystem system = target as TreeSystem;
+               
+        GUILayout.Space(20);
+       
+        if (GUILayout.Button("Apply Settings"))
+        {
+            system.SetTreeDistance(system.m_Settings.m_MaxTreeDistance);
+            system.SetMandatoryShadowDistance(system.m_Settings.m_ShadowDrawDistance);
+
+            system.SetApplyColliders(system.m_Settings.m_ApplyTreeColliders);
+            system.SetCollisionDistance(system.m_Settings.m_ColliderSetDistance);
+            system.SetCollisionRefreshDistance(system.m_Settings.m_ColliderRefreshDistance);
+        }        
+    }
+}
+
+#endif
+
 public class TreeSystem : MonoBehaviour
 {
     private static readonly int MAX_BATCH = 1000;
-    
-    // Data to add
-    private TreeSystemSettings m_Settings = new TreeSystemSettings();
 
+    public TreeColliders m_TreeColliders;
+
+    // Data to add
+    public TreeSystemSettings m_Settings = new TreeSystemSettings();
+    
     public Shader m_ShaderTreeMaster;
     public Shader m_ShaderBillboardMaster;
     
@@ -311,11 +377,11 @@ public class TreeSystem : MonoBehaviour
     
     public static TreeSystem Instance;
     
-    public TreeSystemPrototypeData[] m_ManagedPrototypes;        
-    private Dictionary<int, TreeSystemPrototypeData> m_ManagedPrototypesIndexed;
-    
+    [HideInInspector] public TreeSystemPrototypeData[] m_ManagedPrototypes;        
+    public Dictionary<int, TreeSystemPrototypeData> m_ManagedPrototypesIndexed;
+
     // Managed terrain systems
-    public TreeSystemTerrain[] m_ManagedTerrains;       
+    [HideInInspector] public TreeSystemTerrain[] m_ManagedTerrains;       
     
     public void SetTreeDistance(float distance)
     {
@@ -329,7 +395,39 @@ public class TreeSystem : MonoBehaviour
                 UpdateLODDataDistances(m_ManagedPrototypes[i]);
         }
     }
+
+    /**
+     * Set the distance at which, even if invisible, the trees will have their shadow drawn.
+     * 
+     * Used to mitigate the shadow popping effect since we don't have a built-in Unity mechanism that
+     * allows us to see if a object is casting shadows inside the frutum.
+     */
+    public void SetMandatoryShadowDistance(float distance)
+    {
+        m_Settings.m_ShadowDrawDistance = distance;
+    }
+
+    public void SetApplyColliders(bool applyColliders)
+    {
+        if (applyColliders)
+            m_TreeColliders.StartCollisionUpdates();
+        else
+            m_TreeColliders.StopCollisionUpdates();
+    }
+
+    public void SetCollisionDistance(float distance)
+    {
+        m_Settings.m_ColliderSetDistance = distance;
+        m_TreeColliders.UpdateSettings(m_Settings);
+    }
+
+    public void SetCollisionRefreshDistance(float distance)
+    {
+        m_Settings.m_ColliderRefreshDistance = distance;
+        m_TreeColliders.UpdateSettings(m_Settings);
+    }
     
+
     public float GetTreeDistance()
     {
         return m_Settings.m_MaxTreeDistance;
@@ -340,18 +438,13 @@ public class TreeSystem : MonoBehaviour
         return m_Settings.m_LODTranzitionThreshold;
     }
 
-    // Rendering data
-    [Tooltip("Defaults to 'Default'")]
-    public string m_UsedLayer = "Default";
-    [Tooltip("Defaults to 'Camera.main'")]
-    public Camera m_UsedCamera;
     private int m_UsedLayerId;
 
     void Awake()
     {        
         Instance = this;
 
-        m_UsedLayerId = LayerMask.NameToLayer(m_UsedLayer);
+        m_UsedLayerId = LayerMask.NameToLayer(m_Settings.m_UsedLayer);
 
         // Get the non-alloc version of the plane extraction
         MethodInfo info = typeof(GeometryUtility).GetMethod("Internal_ExtractPlanes", BindingFlags.Static | BindingFlags.NonPublic, null, new Type[] { typeof(Plane[]), typeof(Matrix4x4) }, null);
@@ -373,25 +466,40 @@ public class TreeSystem : MonoBehaviour
         // Build the dictionary based on the index
         m_ManagedPrototypesIndexed = new Dictionary<int, TreeSystemPrototypeData>();
         for (int i = 0; i < m_ManagedPrototypes.Length; i++)
-            m_ManagedPrototypesIndexed.Add(m_ManagedPrototypes[i].m_TreePrototypeHash, m_ManagedPrototypes[i]);                        
+            m_ManagedPrototypesIndexed.Add(m_ManagedPrototypes[i].m_TreePrototypeHash, m_ManagedPrototypes[i]);
+
+        // If we don't have tree colliders initialize them
+        if (!m_TreeColliders)
+        {
+            m_TreeColliders = gameObject.AddComponent<TreeColliders>();
+            m_TreeColliders.m_OwnerSystem = this;
+        }
     }
     
-    private int[] m_IdxTemp = new int[MAX_BATCH];
-    private float[] m_DstTemp = new float[MAX_BATCH];
-    
+    // Temp indices for meshes
+    private int[] m_IdxTempMesh = new int[MAX_BATCH];
+    private float[] m_DstTempMesh = new float[MAX_BATCH];
+    // Temp indices for shadows
+    private int[] m_IdxTempShadow = new int[MAX_BATCH];
+    private float[] m_DstTempShadow = new float[MAX_BATCH];
+
     private Action<Plane[], Matrix4x4> ExtractPlanes;
     private Plane[] m_PlanesTemp = new Plane[6];
     private Vector3 m_CameraPosTemp;
 
     void Start()
     {
+        /*
         if (!m_UsedCamera)
             m_UsedCamera = Camera.main;
+        */
 
         for (int i = 0; i < m_ManagedTerrains.Length; i++)
         {
             TreeSystemTerrain terrain = m_ManagedTerrains[i];
-            terrain.m_ManagedTerrain.drawTreesAndFoliage = false;
+
+            if(terrain.m_ManagedTerrain != null)
+                terrain.m_ManagedTerrain.drawTreesAndFoliage = false;
 
             CullingGroup cullingGroup = new CullingGroup();
 
@@ -408,7 +516,8 @@ public class TreeSystem : MonoBehaviour
                 bounds[j] = new BoundingSphere(terrain.m_Cells[j].m_BoundsSphere.m_CenterRadius);
             }
 
-            cullingGroup.targetCamera = m_UsedCamera;
+            if(!m_Settings.m_UsedCamera)
+                cullingGroup.targetCamera = Camera.main;
 
             cullingGroup.SetBoundingSpheres(bounds);
             cullingGroup.SetBoundingSphereCount(bounds.Length);            
@@ -417,6 +526,9 @@ public class TreeSystem : MonoBehaviour
             terrain.m_CullingGroupSpheres = bounds;
             terrain.m_CullingGroup = cullingGroup;
         }
+
+        if (m_Settings.m_ApplyTreeColliders)
+            SetApplyColliders(true);
     }
 
     void OnDestroy()
@@ -429,22 +541,27 @@ public class TreeSystem : MonoBehaviour
     private Vector3[] m_TempCorners = new Vector3[8];
 
     private int m_DataIssuedMeshTrees = 0;
+    private int m_DataIssuedShadows = 0;
     private int m_DataIssuedTerrainCells = 0;
     private int m_DataIssuedTerrains = 0;
     private int m_DataIssuesDrawCalls = 0;
+    private int m_DataIssuedTerrainCellsFull = 0;
+    [HideInInspector] public int m_DataIssuedActiveColliders = 0;
 
     void Update()
     {        
         m_DataIssuedMeshTrees = 0;
+        m_DataIssuedShadows = 0;
         m_DataIssuedTerrainCells = 0;
+        m_DataIssuedTerrainCellsFull = 0;
         m_DataIssuedTerrains = 0;
         m_DataIssuesDrawCalls = 0;
 
-        Camera camera = m_UsedCamera;
+        Camera camera = m_Settings.m_UsedCamera ? m_Settings.m_UsedCamera : Camera.main;
 
         // Calculate planes and camera position
         ExtractPlanes(m_PlanesTemp, camera.projectionMatrix * camera.worldToCameraMatrix);
-        m_CameraPosTemp = camera.transform.position;
+        m_CameraPosTemp = camera.transform.position;        
 
         // Update the wind block data
         for (int proto = 0; proto < m_ManagedPrototypes.Length; proto++)
@@ -455,7 +572,8 @@ public class TreeSystem : MonoBehaviour
         }
 
         float x, y, z;
-        float treeDistSqr = m_Settings.m_MaxTreeDistance * m_Settings.m_MaxTreeDistance;        
+        float treeDistSqr = m_Settings.m_MaxTreeDistance * m_Settings.m_MaxTreeDistance;
+        float shadowDistSqr = m_Settings.m_ShadowDrawDistance * m_Settings.m_ShadowDrawDistance;
 
         for (int i = 0; i < m_ManagedTerrains.Length; i++)
         {
@@ -478,7 +596,7 @@ public class TreeSystem : MonoBehaviour
                     terrain.m_CullingGroup.enabled = true;
 
                 // If the terrain is within tree range
-                ProcessTerrain(terrain, ref treeDistSqr);
+                ProcessTerrain(terrain, ref treeDistSqr, ref shadowDistSqr);
                 m_DataIssuedTerrains++;
             }
             else
@@ -486,10 +604,10 @@ public class TreeSystem : MonoBehaviour
                 if(terrain.m_CullingGroup.enabled)
                     terrain.m_CullingGroup.enabled = false;
             }
-        }        
+        }                 
     }
 
-    private void ProcessTerrain(TreeSystemTerrain terrain, ref float treeDistSqr)
+    private void ProcessTerrain(TreeSystemTerrain terrain, ref float treeDistSqr, ref float shadowDistSqr)
     {                        
         TreeSystemStructuredTrees[] cells = terrain.m_Cells;
         CullingGroup culling = terrain.m_CullingGroup;
@@ -520,26 +638,34 @@ public class TreeSystem : MonoBehaviour
             z = pt.z - m_CameraPosTemp.z;
 
             float distToCell = x * x + y * y + z * z;
-
+            
             if (distToCell < treeDistSqr && GeometryUtility.TestPlanesAABB(m_PlanesTemp, cell.m_BoundsBox))
-            {                 
+            {
                 // TODO: the same process when we are going to have terrain sub-cells                               
-                ProcessTerrainCell(cell, ref treeDistSqr);
+                ProcessTerrainCell(cell, ref treeDistSqr, ref shadowDistSqr);
 
                 // If it's visible
                 m_DataIssuedTerrainCells++;
-            }            
+            }
+            // TODO: See for the case in which we are at the intersection of 4 cells and the cells are not visible to the frustum
+            // BUT they have trees that 'might' cast shadows inside the frustum. Do that with a special thing that only checks the trees
+            // for the shadow distance, and that's all
+            // else if (m_ApplyShadowPoppingCorrection && distToCell < shadowDistSqr) { }
         }
     }
 
-    private void ProcessTerrainCell(TreeSystemStructuredTrees cell, ref float treeDistSqr)
+    private void ProcessTerrainCell(TreeSystemStructuredTrees cell, ref float treeDistSqr, ref float shadowDistSqr)
     {
         // Draw all trees instanced in MAX_BATCH chunks
-        int tempIndex = 0;
+        int tempIndexTree = 0;
+        int tempIndexShadow = 0;
         float x, y, z;
 
         // If we are completely inside frustum we don't need to AABB test each tree
         bool insideFrustum = TUtils.IsCompletelyInsideFrustum(m_PlanesTemp, TUtils.BoundsCorners(ref cell.m_BoundsBox, ref m_TempCorners));
+
+        // If it is completely inside the frustum notify us
+        if (insideFrustum) m_DataIssuedTerrainCellsFull++;
 
         // Tree instances
         TreeSystemStoredInstance[] treeInstances = cell.m_Instances;
@@ -547,7 +673,10 @@ public class TreeSystem : MonoBehaviour
         // TODO: Hm... if we take that hash it doesn't mean that it's the first visible one...
         int treeHash = treeInstances[0].m_TreeHash;
         int currentTreeHash = treeHash;
-        
+
+        int shadowHash = treeHash;
+        int currentShadowHash = shadowHash;
+
         for (int treeIndex = 0; treeIndex < treeInstances.Length; treeIndex++)
         {
             // 1.33 ms for 110k trees
@@ -569,58 +698,92 @@ public class TreeSystem : MonoBehaviour
                 {
                     currentTreeHash = treeInstances[treeIndex].m_TreeHash;
 
-                    if (tempIndex >= MAX_BATCH || treeHash != currentTreeHash)
+                    if (tempIndexTree >= MAX_BATCH || treeHash != currentTreeHash)
                     {
-                        IssueDrawTrees(m_ManagedPrototypesIndexed[treeHash], cell, m_IdxTemp, m_DstTemp, tempIndex);
-                        tempIndex = 0;
+                        // We're sure that they will not be shadows only
+                        IssueDrawTrees(m_ManagedPrototypesIndexed[treeHash], cell, m_IdxTempMesh, m_DstTempMesh, tempIndexTree, false);
+                        tempIndexTree = 0;
 
                         // Update the hash
                         treeHash = currentTreeHash;
                     }
 
-                    m_IdxTemp[tempIndex] = treeIndex;
-                    m_DstTemp[tempIndex] = Mathf.Sqrt(distToTree);
-                    tempIndex++;
+                    m_IdxTempMesh[tempIndexTree] = treeIndex;
+                    m_DstTempMesh[tempIndexTree] = Mathf.Sqrt(distToTree);
+                    tempIndexTree++;
 
                     m_DataIssuedMeshTrees++;
                 }
             }
             else
             {
+                // TODO: In the future instead of 'GeometryUtility.TestPlanesAABB' have our own function that
+                // checks if the object is within the shadow volume, that is if it casts shadow inside our frustum
+                // Just generate our own set of planes that we'll use...
+
                 // If we are not completely inside the frustum we need to check the bounds of each individual tree
                 if (distToTree <= treeDistSqr && GeometryUtility.TestPlanesAABB(m_PlanesTemp, treeInstances[treeIndex].m_WorldBounds))
                 {
                     currentTreeHash = treeInstances[treeIndex].m_TreeHash;
 
-                    if (tempIndex >= MAX_BATCH || treeHash != currentTreeHash)
+                    if (tempIndexTree >= MAX_BATCH || treeHash != currentTreeHash)
                     {
-                        IssueDrawTrees(m_ManagedPrototypesIndexed[treeHash], cell, m_IdxTemp, m_DstTemp, tempIndex);
-                        tempIndex = 0;
+                        IssueDrawTrees(m_ManagedPrototypesIndexed[treeHash], cell, m_IdxTempMesh, m_DstTempMesh, tempIndexTree, false);
+                        tempIndexTree = 0;
 
                         // Update the hash
                         treeHash = currentTreeHash;
                     }
 
-                    m_IdxTemp[tempIndex] = treeIndex;
-                    m_DstTemp[tempIndex] = Mathf.Sqrt(distToTree);
-                    tempIndex++;
+                    m_IdxTempMesh[tempIndexTree] = treeIndex;
+                    m_DstTempMesh[tempIndexTree] = Mathf.Sqrt(distToTree);
+                    tempIndexTree++;
 
                     m_DataIssuedMeshTrees++;
+                }
+                // Same operation as above but with different matrices
+                else if(m_Settings.m_ApplyShadowPoppingCorrection && distToTree < shadowDistSqr)
+                {
+                    // Even if we are invisible but within the shadow sitance still cast shadows... 
+                    // (not the most efficient method though, waiting for the complete one)
+
+                    currentShadowHash = treeInstances[treeIndex].m_TreeHash;
+
+                    if(tempIndexShadow >= MAX_BATCH || shadowHash != currentShadowHash)
+                    {
+                        IssueDrawTrees(m_ManagedPrototypesIndexed[shadowHash], cell, m_IdxTempShadow, m_DstTempShadow, tempIndexShadow, true);
+                        tempIndexShadow = 0;
+
+                        // Update the shadow hash
+                        shadowHash = currentShadowHash;
+                    }
+
+                    m_IdxTempShadow[tempIndexShadow] = treeIndex;
+                    m_DstTempShadow[tempIndexShadow] = Mathf.Sqrt(distToTree);
+                    tempIndexShadow++;
+
+                    m_DataIssuedShadows++;
                 }
             }
         } // End cell tree iteration
 
-        if (tempIndex > 0)
+        if (tempIndexTree > 0)
         {
-            // Get a tree hash from the first element of the array so that we know for sure that we use the correc prototype data
-            IssueDrawTrees(m_ManagedPrototypesIndexed[treeInstances[m_IdxTemp[0]].m_TreeHash], cell,
-                m_IdxTemp, m_DstTemp, tempIndex);
+            // Get a tree hash from the first element of the array so that we know for sure that we use the correct prototype data
+            IssueDrawTrees(m_ManagedPrototypesIndexed[treeInstances[m_IdxTempMesh[0]].m_TreeHash], cell,
+                m_IdxTempMesh, m_DstTempMesh, tempIndexTree, false);
+            
+            tempIndexTree = 0;
+        }
 
-            tempIndex = 0;
+        if(tempIndexShadow > 0)
+        {
+            IssueDrawTrees(m_ManagedPrototypesIndexed[treeInstances[m_IdxTempShadow[0]].m_TreeHash], cell,
+                m_IdxTempShadow, m_DstTempShadow, tempIndexShadow, true);
+
+            tempIndexShadow = 0;
         }
     }
-
-    public bool m_UseInstancing = true;
 
     private static readonly int MAX_LOD_COUNT = 5;
 
@@ -647,7 +810,7 @@ public class TreeSystem : MonoBehaviour
     // How many of that certain lod level we have
     private int[] m_MtxLODTempCount = new int[MAX_LOD_COUNT];
 
-    private void IssueDrawTrees(TreeSystemPrototypeData data, TreeSystemStructuredTrees trees, int[] indices, float[] dist, int count)
+    private void IssueDrawTrees(TreeSystemPrototypeData data, TreeSystemStructuredTrees trees, int[] indices, float[] dist, int count, bool shadowsOnly)
     {
         for(int i = 0; i < MAX_LOD_COUNT; i++)
             m_MtxLODTempCount[i] = 0;        
@@ -665,7 +828,7 @@ public class TreeSystem : MonoBehaviour
             ProcessLOD(ref lodData, ref maxLod3D, ref lodInstanceData[indices[i]], ref dist[i]);
         }
 
-        if (m_UseInstancing)
+        if (m_Settings.m_UseInstancing)
         {
             // Build the batched stuff. We want to batch the same LOD and draw them using instancing
             for (int i = 0; i < count; i++)
@@ -718,15 +881,15 @@ public class TreeSystem : MonoBehaviour
             for (int i = 0; i <= maxLod3D; i++)
             {
                 if(i == 0)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_0, ref m_MtxLODTranzDetail_0, ref m_MtxLODTranzFull_0, ref m_MtxLODTempCount[i]);
+                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_0, ref m_MtxLODTranzDetail_0, ref m_MtxLODTranzFull_0, ref m_MtxLODTempCount[i], ref shadowsOnly);
                 else if(i == 1)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_1, ref m_MtxLODTranzDetail_1, ref m_MtxLODTranzFull_1, ref m_MtxLODTempCount[i]);
+                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_1, ref m_MtxLODTranzDetail_1, ref m_MtxLODTranzFull_1, ref m_MtxLODTempCount[i], ref shadowsOnly);
                 else if (i == 2)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_2, ref m_MtxLODTranzDetail_2, ref m_MtxLODTranzFull_2, ref m_MtxLODTempCount[i]);
+                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_2, ref m_MtxLODTranzDetail_2, ref m_MtxLODTranzFull_2, ref m_MtxLODTempCount[i], ref shadowsOnly);
                 else if (i == 3)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_3, ref m_MtxLODTranzDetail_3, ref m_MtxLODTranzFull_3, ref m_MtxLODTempCount[i]);
+                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_3, ref m_MtxLODTranzDetail_3, ref m_MtxLODTranzFull_3, ref m_MtxLODTempCount[i], ref shadowsOnly);
                 else if (i == 4)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_4, ref m_MtxLODTranzDetail_4, ref m_MtxLODTranzFull_4, ref m_MtxLODTempCount[i]);
+                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_4, ref m_MtxLODTranzDetail_4, ref m_MtxLODTranzFull_4, ref m_MtxLODTempCount[i], ref shadowsOnly);
             }
         }
         else
@@ -735,7 +898,7 @@ public class TreeSystem : MonoBehaviour
             for (int i = 0; i < count; i++)
             {
                 int idx = indices[i];
-                DrawProcessedLOD(ref lodData, ref maxLod3D, ref lodInstanceData[idx], ref treeInstances[idx]);
+                DrawProcessedLOD(ref lodData, ref maxLod3D, ref lodInstanceData[idx], ref treeInstances[idx], ref shadowsOnly);
             }
         }
     }
@@ -782,12 +945,12 @@ public class TreeSystem : MonoBehaviour
     }
 
     // Draw and process routines
-    private void DrawProcessedLOD(ref TreeSystemLODData[] data, ref int maxLod3D, ref TreeSystemLODInstance lodInst, ref TreeSystemStoredInstance inst)
+    private void DrawProcessedLOD(ref TreeSystemLODData[] data, ref int maxLod3D, ref TreeSystemLODInstance lodInst, ref TreeSystemStoredInstance inst, ref bool shadowsOnly)
     {
         int lod = lodInst.m_LODLevel;
 
         // Draw the stuff with the material specific for each LOD
-        Draw3DLOD(ref data[lod], ref lodInst, ref inst);
+        Draw3DLOD(ref data[lod], ref lodInst, ref inst, ref shadowsOnly);
 
         if (lod == maxLod3D && lodInst.m_LODFullFade < 1)
         {
@@ -796,8 +959,8 @@ public class TreeSystem : MonoBehaviour
         }
     }
     
-    public void Draw3DLODInstanced(ref TreeSystemLODData data, ref Matrix4x4[] positions, ref float[] lodDetail, ref float[] lodFull, ref int count)
-    {        
+    public void Draw3DLODInstanced(ref TreeSystemLODData data, ref Matrix4x4[] positions, ref float[] lodDetail, ref float[] lodFull, ref int count, ref bool shadowsOnly)
+    {                
         if (count > 0)
         {
             data.m_Block.SetFloatArray(m_ShaderIDFadeLODDetail, lodDetail);
@@ -806,8 +969,9 @@ public class TreeSystem : MonoBehaviour
             for (int mat = 0; mat < data.m_Materials.Length; mat++)
             {
                 Graphics.DrawMeshInstanced(data.m_Mesh, mat, data.m_Materials[mat], positions, count, data.m_Block,
-                                UnityEngine.Rendering.ShadowCastingMode.On, true, m_UsedLayerId, m_UsedCamera);
-                
+                    shadowsOnly == false ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly,
+                    true, m_UsedLayerId, m_Settings.m_UsedCamera);
+
                 m_DataIssuesDrawCalls++;
             }
         }
@@ -815,7 +979,7 @@ public class TreeSystem : MonoBehaviour
 
     float[] m_TempLOD = new float[1];
 
-    public void Draw3DLOD(ref TreeSystemLODData data, ref TreeSystemLODInstance lodInst, ref TreeSystemStoredInstance inst)
+    public void Draw3DLOD(ref TreeSystemLODData data, ref TreeSystemLODInstance lodInst, ref TreeSystemStoredInstance inst, ref bool shadowsOnly)
     {
         m_TempLOD[0] = lodInst.m_LODTransition;
         data.m_Block.SetFloatArray(m_ShaderIDFadeLODDetail, m_TempLOD);
@@ -824,7 +988,9 @@ public class TreeSystem : MonoBehaviour
 
         for (int mat = 0; mat < data.m_Materials.Length; mat++)
         {
-            Graphics.DrawMesh(data.m_Mesh, inst.m_PositionMtx, data.m_Materials[mat], m_UsedLayerId, m_UsedCamera, mat, data.m_Block, true, true);
+            Graphics.DrawMesh(data.m_Mesh, inst.m_PositionMtx, data.m_Materials[mat], m_UsedLayerId, m_Settings.m_UsedCamera, mat, data.m_Block,
+                shadowsOnly == false ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly,
+                true);
 
             m_DataIssuesDrawCalls++;
         }
@@ -849,13 +1015,22 @@ public class TreeSystem : MonoBehaviour
 
         for (int mat = 0; mat < data.m_Materials.Length; mat++)
         {
-            Graphics.DrawMesh(data.m_Mesh, m_BillboardTempPos, data.m_Materials[mat], m_UsedLayerId, m_UsedCamera, mat, data.m_Block, true, true);
+            Graphics.DrawMesh(data.m_Mesh, m_BillboardTempPos, data.m_Materials[mat], m_UsedLayerId, m_Settings.m_UsedCamera, mat, data.m_Block, true, true);
             m_DataIssuesDrawCalls++;
         }
     }       
 
     public string GetDrawInfo()
     {
-        return "Issued terrains: " + m_DataIssuedTerrains + "\nIssued cells: " + m_DataIssuedTerrainCells + "\nIssued trees: " + m_DataIssuedMeshTrees + "\nIssued draw calls: " + m_DataIssuesDrawCalls + "\nInstancing: " + m_UseInstancing;
+        return "Issued terrains: " + m_DataIssuedTerrains + 
+            "\nIssued cells: " + m_DataIssuedTerrainCells +
+            "\nIssued full cells: " + m_DataIssuedTerrainCellsFull +
+            "\nIssued mesh trees: " + m_DataIssuedMeshTrees + 
+            "\nIssued shadow trees: " + m_DataIssuedShadows + 
+            "\nIssued draw calls: " + m_DataIssuesDrawCalls + 
+            "\nIssued active colliders: " + m_DataIssuedActiveColliders +
+            "\nUse instancing: " + m_Settings.m_UseInstancing + 
+            "\nUse colliders: " + m_Settings.m_ApplyTreeColliders +
+            "\nUse shadow correction: " + m_Settings.m_ApplyShadowPoppingCorrection;
     }
 }

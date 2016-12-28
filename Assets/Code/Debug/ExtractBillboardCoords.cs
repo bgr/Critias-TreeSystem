@@ -102,7 +102,7 @@ public class ExtractBillboardCoords : MonoBehaviour {
 
             for (int i = 0; i < verts.Length; i++)
             {
-                Log.i("Index: " + i + " vert: " + verts[i]);
+                Debug.Log("Index: " + i + " vert: " + verts[i]);
             }
 
             ushort[] indices = b.billboard.GetIndices();
@@ -110,7 +110,7 @@ public class ExtractBillboardCoords : MonoBehaviour {
             Debug.Log("Index count: " + indices.Length);
             for (int i = 0; i < indices.Length; i++)
             {
-                Log.i("Index: " + i + " trindex: " + indices[i]);
+                Debug.Log("Index: " + i + " trindex: " + indices[i]);
             }
         }
         else

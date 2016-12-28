@@ -11,9 +11,12 @@ public class DebugUtils : MonoBehaviour
     public float m_Distance = 300;
     public bool m_UseInstancing = true;
 
+    public bool m_UseSpeedTree = false;
+    public GameObject[] m_TreeRelated;
+
     void Start()
     {
-        m_TreeSystem.m_UseInstancing = m_UseInstancing;
+        m_TreeSystem.m_Settings.m_UseInstancing = m_UseInstancing;
         m_TreeSystem.SetTreeDistance(m_Distance);
     }
 
@@ -33,7 +36,29 @@ public class DebugUtils : MonoBehaviour
         if(inst != m_UseInstancing)
         {
             m_UseInstancing = inst;
-            m_TreeSystem.m_UseInstancing = m_UseInstancing;
+            m_TreeSystem.m_Settings.m_UseInstancing = m_UseInstancing;
+        }
+
+        bool useSpeed = GUI.Toggle(new Rect(20, 80, 400, 20), m_UseSpeedTree, " Use SpeedTree (WARNING, might kill your PC!!)");
+
+        if(useSpeed != m_UseSpeedTree)
+        {
+            m_UseSpeedTree = useSpeed;
+
+            if(m_UseSpeedTree)
+            {
+                foreach (GameObject syst in m_TreeRelated)
+                    syst.SetActive(false);
+                foreach (TreeSystemTerrain t in m_TreeSystem.m_ManagedTerrains)
+                    t.m_ManagedTerrain.drawTreesAndFoliage = true;
+            }
+            else
+            {
+                foreach (GameObject syst in m_TreeRelated)
+                    syst.SetActive(true);
+                foreach (TreeSystemTerrain t in m_TreeSystem.m_ManagedTerrains)
+                    t.m_ManagedTerrain.drawTreesAndFoliage = false;
+            }
         }
 
         if(m_Info)

@@ -1,5 +1,6 @@
 *.sln
 Library
 Temp
+Extra
 *.suo
 *.csproj

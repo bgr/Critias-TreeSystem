@@ -33,17 +33,34 @@ public class TreeifierEditor : Editor
             system.PrintPossibleCellCounts();
         }
 
+        /*
+        GUILayout.Space(20);
+        foreach(Terrain terrain in system.m_ManagedTerrains)
+        {
+            if (GUILayout.Button("Store [" + terrain.name + "] Trees"))
+            {
+
+            }
+
+            if (GUILayout.Button("Restore [" + terrain.name + "] Trees"))
+            {
+
+            }
+        }
+        */
+        
         DrawDefaultInspector();
     }
 }
 
 #endif
 
+[ExecuteInEditMode]
 public class Treeifier : MonoBehaviour
 {
 #if UNITY_EDITOR
     [Tooltip("Generated at edit-time, don't touch!")]
-    public TreeSystemPrototypeData[] m_ManagedPrototypes;    
+    [HideInInspector] public TreeSystemPrototypeData[] m_ManagedPrototypes;    
 
     // Main terrain that holds all the tree data. Must also be contained in the managed terrains array
     public Terrain m_MainManagedTerrain;
@@ -53,7 +70,13 @@ public class Treeifier : MonoBehaviour
     public int[] m_CellSizes;
 
     // Only extract the specified trees
-    public GameObject[] m_TreeToExtractPrefabs;    
+    public GameObject[] m_TreeToExtractPrefabs;
+
+    // You can add manually placed trees to the scene, and if in the full hierarchy of these objects
+    // any trees matching the used prefabs are found, then those are also added to the system
+    // if the are withing a terrain's bounds and within the cell subdivisions of a terrain. Very usefull
+    // for manually placed trees and for vines on houses etc...
+    public GameObject[] m_TreeToExtractExtra;
     
     public Mesh m_SystemQuad;
 
@@ -72,74 +95,85 @@ public class Treeifier : MonoBehaviour
     [Tooltip("Only used if we use the XML data")]
     public string m_TreeXMLStorePath = "Assets/Editor/AtlantisQuest/TreeXMLData";
 
+    public void Start()
+    {
+        m_BillboardShaderBatch = Shader.Find("Critias/Nature/SpeedTree Bilboard Batch");
+        m_BillboardShaderMaster = Shader.Find("Critias/Nature/SpeedTree Billboard Master");
+        m_TreeShaderMaster = Shader.Find("Critias/Nature/SpeedTree Master");
+    }
+
     public void PrintPossibleCellCounts()
     {
-        Log.d("------------------------------------");
+        Debug.Log("------------------------------------");
 
-        Log.d("---- BEGIN MAIN TERRAIN INFO ----");
+        Debug.Log("---- BEGIN MAIN TERRAIN INFO ----");
         TerrainUtils.CellInfo(m_MainManagedTerrain);
-        Log.d("---- END MAIN TERRAIN INFO ----");
+        Debug.Log("---- END MAIN TERRAIN INFO ----");
 
         foreach (Terrain t in m_ManagedTerrains)
         {
-            Log.d("---- BEGIN TERRAIN INFO ----");
+            Debug.Log("---- BEGIN TERRAIN INFO ----");
             TerrainUtils.CellInfo(t);
-            Log.d("---- END TERRAIN INFO ----");
+            Debug.Log("---- END TERRAIN INFO ----");
         }
 
-        Log.d("------------------------------------");                
+        Debug.Log("------------------------------------");                        
     }
     
     public void GenerateTreePrototypeData()
     {
         if (TerrainUtils.TreeHashCheck(m_MainManagedTerrain))
         {
-            Log.e("Tree name hash collision, fix!");
+            Debug.LogError("Tree name hash collision, fix!");
             return;
         }
 
-        TreePrototype[] proto = m_MainManagedTerrain.terrainData.treePrototypes;
-        
+        GameObject[] proto = m_TreeToExtractPrefabs;        
         List<TreeSystemPrototypeData> managed = new List<TreeSystemPrototypeData>();
 
         for (int i = 0; i < proto.Length; i++)
         {
-            if (ShouldUsePrefab(proto[i].prefab) >= 0)
+            GameObject prefab = proto[i];
+
+            if (PrefabUtility.GetPrefabType(prefab) != PrefabType.ModelPrefab ||
+                prefab.GetComponent<LODGroup>() == null ||
+                prefab.GetComponentInChildren<BillboardRenderer>() == null)
             {
-                GameObject prefab = proto[i].prefab;
-
-                TreeSystemPrototypeData data = new TreeSystemPrototypeData();
-                data.m_TreePrototype = prefab;
-                // Use hash here instead of the old index
-                data.m_TreePrototypeHash = TUtils.GetStableHashCode(proto[i].prefab.name);
-
-                if (m_UseXMLData)
-                {
-                    TextAsset textData = AssetDatabase.LoadAssetAtPath<TextAsset>(m_TreeXMLStorePath + "/" + proto[i].prefab.name + ".xml");
-
-                    if (textData != null)
-                        data.m_TreeBillboardData = textData;
-                    else
-                        Debug.LogError("Could not find XML data for: " + data.m_TreePrototype.name);
-                }
-
-                // Instantiate LOD data that is going to be populated at runtime
-                LOD[] lods = prefab.GetComponent<LODGroup>().GetLODs();
-                TreeSystemLODData[] lodData = new TreeSystemLODData[lods.Length];
-                // Generate some partial LOD data that doesn't have to be calculated at runtime
-                data.m_LODData = lodData;
-
-                for (int lod = 0; lod < lodData.Length; lod++)
-                {
-                    TreeSystemLODData d = new TreeSystemLODData();
-                    lodData[lod] = d;                    
-                }
-
-                data.m_MaxLodIndex = lodData.Length - 1;
-                data.m_MaxLod3DIndex = lodData.Length - 2;
-
-                managed.Add(data);
+                Debug.LogError("Invalid prefab: " + prefab.name + ". Make sure that it is a SpeedTree, that it contains a 'LODGroup' and that it has a 'BillboardRenderer' component.");
+                continue;
             }
+
+            TreeSystemPrototypeData data = new TreeSystemPrototypeData();
+            data.m_TreePrototype = prefab;
+            // Use hash here instead of the old index
+            data.m_TreePrototypeHash = TUtils.GetStableHashCode(prefab.name);
+
+            if (m_UseXMLData)
+            {
+                TextAsset textData = AssetDatabase.LoadAssetAtPath<TextAsset>(m_TreeXMLStorePath + "/" + prefab.name + ".xml");
+
+                if (textData != null)
+                    data.m_TreeBillboardData = textData;
+                else
+                    Debug.LogError("Could not find XML data for: " + data.m_TreePrototype.name);
+            }
+            
+            // Instantiate LOD data that is going to be populated at runtime
+            LOD[] lods = prefab.GetComponent<LODGroup>().GetLODs();
+            TreeSystemLODData[] lodData = new TreeSystemLODData[lods.Length];
+            // Generate some partial LOD data that doesn't have to be calculated at runtime
+            data.m_LODData = lodData;
+
+            for (int lod = 0; lod < lodData.Length; lod++)
+            {
+                TreeSystemLODData d = new TreeSystemLODData();
+                lodData[lod] = d;
+            }
+
+            data.m_MaxLodIndex = lodData.Length - 1;
+            data.m_MaxLod3DIndex = lodData.Length - 2;
+
+            managed.Add(data);
         }
 
         m_ManagedPrototypes = managed.ToArray();
@@ -159,12 +193,19 @@ public class Treeifier : MonoBehaviour
 
             if (d.m_TreePrototype == null)
             {
-                Log.e("Nothing set for data at index: " + i);
+                Debug.LogError("Nothing set for data at index: " + i);
                 continue;
             }            
 
             // Get the protorype's billboard asset
             BillboardRenderer bill = d.m_TreePrototype.GetComponentInChildren<BillboardRenderer>();
+
+            if(bill == null)
+            {
+                Debug.LogError("Prototype: " + d.m_TreePrototype.name + " does not contain a billboard renderer! Items without billboard renderers are not supported at the moment!");
+                continue;
+            }
+
             BillboardAsset billAsset = bill.billboard;
 
             // Set sizes
@@ -184,7 +225,7 @@ public class Treeifier : MonoBehaviour
 
                 if (doc["SpeedTreeRaw"]["Billboards"]["Vertical"] == null || doc["SpeedTreeRaw"]["Billboards"]["Horizontal"] == null)
                 {
-                    Debug.Log("Missing tree XML data for: " + d.m_TreePrototype.name);
+                    Debug.LogError("Missing tree XML data for: " + d.m_TreePrototype.name);
                 }
                 else
                 {
@@ -274,6 +315,12 @@ public class Treeifier : MonoBehaviour
             GameObject prefab = proto[i].m_TreePrototype;
             TreeSystemPrototypeData data = proto[i];
 
+            if(prefab.GetComponent<LODGroup>() == null)
+            {
+                Debug.LogError("Prototype: " + prefab.name + " does not have a LOD group! Please fix and regenerate, or the system will break!");
+                continue;
+            }
+
             // Instantiate LOD data that is going to be populated at runtime
             LOD[] lods = prefab.GetComponent<LODGroup>().GetLODs();
             TreeSystemLODData[] lodData = new TreeSystemLODData[lods.Length];
@@ -332,8 +379,6 @@ public class Treeifier : MonoBehaviour
         // EditorUtility.CopySerialized
     }
 
-
-
     public void GenerateTrees()
     {
         if(m_ManagedTerrains.Length != m_CellSizes.Length)
@@ -366,7 +411,10 @@ public class Treeifier : MonoBehaviour
         {
             m_CellHolder = new GameObject("TreeSystemCellHolder");
         }
-          
+
+        // Use the extracted trees and add them to the terrain that it fits in
+        List<GameObject> extraTrees = ExtractTreesExtra();
+
         m_CellHolder.transform.position = Vector3.zero;
         m_CellHolder.transform.localScale = Vector3.one;
         m_CellHolder.transform.rotation = Quaternion.identity;
@@ -385,14 +433,34 @@ public class Treeifier : MonoBehaviour
             // Set parent
             cellHolder.transform.parent = m_CellHolder.transform;            
 
-            systemTerrains.Add(ProcessTerrain(m_ManagedTerrains[i], m_CellSizes[i], cellHolder));
+            systemTerrains.Add(ProcessTerrain(m_ManagedTerrains[i], m_CellSizes[i], cellHolder, extraTrees));
+        }        
+
+        // TODO: implement a scriptable object maybe? But it works fine with 400k+ trees so...
+        FindObjectOfType<TreeSystem>().m_ManagedTerrains = systemTerrains.ToArray();       
+        
+        for(int i = 0; i < m_TreeToExtractExtra.Length; i++)
+            m_TreeToExtractExtra[i].SetActive(false);
+
+        if(extraTrees.Count > 0)
+        {
+            Debug.LogError(extraTrees.Count + " extra trees did not find terrain location.");
+
+            string names = "";
+            foreach (GameObject tree in extraTrees)
+                names += tree.name + ", ";
+
+            Debug.LogError("Names:[ " + names + " ]");
         }
 
-        // TODO: implement a scriptable object maybe? But it works fine with 250k trees so...
-        FindObjectOfType<TreeSystem>().m_ManagedTerrains = systemTerrains.ToArray();                              
+        Debug.Log("Finished extracting, extracted " + systemTerrains.Count + " terrains");
+
+        // Mark scene dirty
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(gameObject.scene);
     }
 
-    private TreeSystemTerrain ProcessTerrain(Terrain terrain, int cellSize, GameObject cellHolder)
+    // TODO: see from the list which trees fit in here
+    private TreeSystemTerrain ProcessTerrain(Terrain terrain, int cellSize, GameObject cellHolder, List<GameObject> extraTrees)
     {
         TreeSystemTerrain systemTerrain = new TreeSystemTerrain();
 
@@ -435,6 +503,8 @@ public class Treeifier : MonoBehaviour
             }
         }
 
+        int treeInstancesCount = 0, treeExtraCount = 0;
+
         TreeInstance[] terrainTreeInstances = terrain.terrainData.treeInstances;
         TreePrototype[] terrainTreeProto = terrain.terrainData.treePrototypes;
 
@@ -446,6 +516,8 @@ public class Treeifier : MonoBehaviour
 
             if (ShouldUsePrefab(proto) < 0)
                 continue;
+
+            treeInstancesCount++;
 
             // Get bounds for that mesh
             Bounds b = proto.transform.Find(proto.name + "_LOD0").gameObject.GetComponent<MeshFilter>().sharedMesh.bounds;
@@ -474,6 +546,65 @@ public class Treeifier : MonoBehaviour
 
             strInst[row, col].Add(inst);
         }
+
+        List<GameObject> containedTrees = new List<GameObject>();
+
+        // Change if we're going to use something diff than 50 for max extent
+        Bounds terrainExtendedBounds = systemTerrain.m_ManagedTerrainBounds;
+        terrainExtendedBounds.Expand(new Vector3(0, 50, 0));
+
+        // Same as a instance with minor diferences
+        for (int i = 0; i < extraTrees.Count; i++)
+        {
+            GameObject treeInstance = extraTrees[i];
+            
+            // If the terrain contains the stuff
+            if (terrainExtendedBounds.Contains(treeInstance.transform.position) == false)
+                continue;
+
+            treeExtraCount++;
+
+            // Add the tree to the list of trees for removal
+            containedTrees.Add(treeInstance);
+
+            // Owner
+            GameObject proto = GetPrefabOwner(treeInstance);
+
+            // Get bounds for that mesh
+            Bounds b = proto.transform.Find(proto.name + "_LOD0").gameObject.GetComponent<MeshFilter>().sharedMesh.bounds;
+
+            // Calculate this from normalized terrain space to terrain's local space so that our row/col info are correct.
+            // Do the same when testing for cell row/col in which the player is, transform to terrain local space
+            Vector3 pos = TerrainUtils.TerrainToTerrainPos(TerrainUtils.WorldPosToTerrain(treeInstance.transform.position, terrain), terrain);
+            
+            int row = Mathf.Clamp(Mathf.FloorToInt(pos.x / sizes.x * cellCount), 0, cellCount - 1);
+            int col = Mathf.Clamp(Mathf.FloorToInt(pos.z / sizes.z * cellCount), 0, cellCount - 1);
+
+            pos = treeInstance.transform.position;
+            Vector3 scale = treeInstance.transform.localScale;
+            float rot = treeInstance.transform.rotation.eulerAngles.y * Mathf.Deg2Rad;
+
+            // Set the hash
+            int hash = TUtils.GetStableHashCode(proto.name);
+
+            // Set the mtx
+            Matrix4x4 mtx = Matrix4x4.TRS(pos, Quaternion.Euler(0, rot * Mathf.Rad2Deg, 0), scale);
+
+            TreeSystemStoredInstance inst = new TreeSystemStoredInstance();
+
+            inst.m_TreeHash = hash;
+            inst.m_PositionMtx = mtx;
+            inst.m_WorldPosition = pos;
+            inst.m_WorldScale = scale;
+            inst.m_WorldRotation = rot;
+            inst.m_WorldBounds = TUtils.LocalToWorld(ref b, ref mtx);
+
+            strInst[row, col].Add(inst);
+        }
+
+        // Remove the items from the extra trees
+        foreach (GameObject tree in containedTrees)
+            extraTrees.Remove(tree);
 
         // Generate the mesh that contain all the billboards
         for (int r = 0; r < cellCount; r++)
@@ -518,9 +649,12 @@ public class Treeifier : MonoBehaviour
                 }
             }
         }
-
+        
         // Set the cells that contain the trees to the system terrain
         systemTerrain.m_Cells = list.ToArray();
+
+        // Print extraction data
+        Debug.Log("Extracted for terrain: " + terrain.name + " instance trees: " + treeInstancesCount + " extra trees: " + treeExtraCount);
 
         // Return it
         return systemTerrain;
@@ -540,12 +674,12 @@ public class Treeifier : MonoBehaviour
 
                 bool rotated = bool.Parse(elem.GetAttribute("Rotated"));
 
-                Log.i("Rotated: " + rotated);
+                Debug.Log("Rotated: " + rotated);
 
                 string[] u = node["TexcoordU"].InnerText.Trim().Split(' ');
                 string[] v = node["TexcoordV"].InnerText.Trim().Split(' ');
 
-                Log.i("UV data: " + TUtils.ToString(u) + " " + TUtils.ToString(v));
+                Debug.Log("UV data: " + TUtils.ToString(u) + " " + TUtils.ToString(v));
 
                 if (v.Length != u.Length || v.Length != 4)
                 {
@@ -560,7 +694,7 @@ public class Treeifier : MonoBehaviour
                     uv.Add(new Vector2(float.Parse(u[j]), float.Parse(v[j])));
                 }
 
-                Log.i("Extracted uv: " + TUtils.ToString(uv));
+                Debug.Log("Extracted uv: " + TUtils.ToString(uv));
                 allUv.AddRange(uv);
             }
         }
@@ -569,7 +703,7 @@ public class Treeifier : MonoBehaviour
             string[] u = bills["TexcoordU"].InnerText.Trim().Split(' ');
             string[] v = bills["TexcoordV"].InnerText.Trim().Split(' ');
 
-            Log.i("UV data: " + TUtils.ToString(u) + " " + TUtils.ToString(v));
+            Debug.Log("UV data: " + TUtils.ToString(u) + " " + TUtils.ToString(v));
 
             if (v.Length != u.Length || v.Length != 4)
             {
@@ -583,7 +717,7 @@ public class Treeifier : MonoBehaviour
                 uv.Add(new Vector2(float.Parse(u[j]), float.Parse(v[j])));
             }
 
-            Log.i("Extracted uv: " + TUtils.ToString(uv));
+            Debug.Log("Extracted uv: " + TUtils.ToString(uv));
             allUv.AddRange(uv);
         }
 
@@ -691,8 +825,34 @@ public class Treeifier : MonoBehaviour
         filter.mesh = treeMesh;
     }
 
-    private int ShouldUsePrefab(GameObject prefab)
+    public void RecursivelyExtract(GameObject extract, List<GameObject> treeChildren)
     {
+        // If it is a prefab instance and we have
+        if (PrefabUtility.GetPrefabType(extract) == PrefabType.ModelPrefabInstance && ShouldUsePrefabInstance(extract))
+        {
+            treeChildren.Add(extract);
+        }
+
+        // Extract it's owned entities
+        for (int i = 0; i < extract.transform.childCount; i++)
+            RecursivelyExtract(extract.transform.GetChild(i).gameObject, treeChildren);
+    }
+
+    private List<GameObject> ExtractTreesExtra()
+    {
+        // Iterate the items recursively
+        List<GameObject> treePrefabs = new List<GameObject>();
+
+        for (int i = 0; i < m_TreeToExtractExtra.Length; i++)
+        {
+            RecursivelyExtract(m_TreeToExtractExtra[i], treePrefabs);
+        }
+
+        return treePrefabs;
+    }
+
+    private int ShouldUsePrefab(GameObject prefab)
+    {        
         for (int i = 0; i < m_TreeToExtractPrefabs.Length; i++)
         {
             if (prefab.name == m_TreeToExtractPrefabs[i].name)
@@ -701,6 +861,19 @@ public class Treeifier : MonoBehaviour
 
         return -1;
     }
+    
+    private GameObject GetPrefabOwner(GameObject obj)
+    {
+        Debug.Assert(PrefabUtility.GetPrefabType(obj) == PrefabType.ModelPrefabInstance);
+
+        Object owner = PrefabUtility.GetPrefabParent(obj);
+        return System.Array.Find(m_TreeToExtractPrefabs, (x) => x == owner);
+    }
+
+    private bool ShouldUsePrefabInstance(GameObject obj)
+    {
+        return GetPrefabOwner(obj) != null;
+    }    
 
     private TreeSystemPrototypeData GetPrototypeWithHash(int hash)
     {
