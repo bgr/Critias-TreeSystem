@@ -8,7 +8,7 @@ The Critias tree system is an Unity addition that is used for an, currently in-d
 performance of the Unity's built-in SpeedTree implementation.
 
 ! IMPORTANT !
-At runtime the managed terain's trees and foliage is turned off, so your terrain's grass will go away. In order to mitigate that I would recommend having two terrains, one for trees and the other for grass. A script, 'TerrainUtlity' for that usage has been added
+At runtime the managed terain's trees and foliage is turned off, so your terrain's grass will go away. In order to mitigate that I would recommend having two terrains, one for trees and the other for grass. A script, 'TerrainUtility' for that usage has been added.
 
 HOWTO:
 Long story short, there are two important scripts. 'Treeifier' and 'TreeSystem'. Create an game object and add it these two scripts. The 'Treeifier' script is used for extracting the data required for each drawn tree type and generating the indexed and optimized data at edit-time. The 'TreeSystem' script is used for using the data that was generated at edit-time and rendering it in a very optimal manner.
