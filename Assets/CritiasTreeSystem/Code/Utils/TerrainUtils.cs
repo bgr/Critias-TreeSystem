@@ -530,8 +530,9 @@ public class TerrainUtils : MonoBehaviour
                     box.size = new Vector3(box.size.x, (max - min) + minOffset + maxOffset, box.size.z);
                     sphere.radius = box.size.magnitude / 2f;
 
+                    // Don't forget to apply the terrain's Y offset
                     cell.transform.position = new Vector3(box.transform.position.x,
-                        (min - minOffset) + ((max + maxOffset) - (min - minOffset)) / 2.0f,
+                        (min - minOffset) + ((max + maxOffset) - (min - minOffset)) / 2.0f + box.transform.position.y,
                         box.transform.position.z);
                 }
 
