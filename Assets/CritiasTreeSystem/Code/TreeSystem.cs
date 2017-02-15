@@ -516,8 +516,10 @@ public class TreeSystem : MonoBehaviour
                 bounds[j] = new BoundingSphere(terrain.m_Cells[j].m_BoundsSphere.m_CenterRadius);
             }
 
-            if(!m_Settings.m_UsedCamera)
+            if (!m_Settings.m_UsedCamera)
                 cullingGroup.targetCamera = Camera.main;
+            else
+                cullingGroup.targetCamera = m_Settings.m_UsedCamera;
 
             cullingGroup.SetBoundingSpheres(bounds);
             cullingGroup.SetBoundingSphereCount(bounds.Length);            
