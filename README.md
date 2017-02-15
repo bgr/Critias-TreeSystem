@@ -34,7 +34,7 @@ For any extra details, suggestions or questions and plans for the future, feel f
 
 Forums link: https://forum.unity3d.com/threads/free-critias-speedtree-tree-system.437520/
 
-Asset store link: - pending -
+Asset store link: https://www.assetstore.unity3d.com/en/#!/content/79501
 
 Is the system working great for you? Would you like to also have a detail or grass system in the future? Then consider donating! But there is absolutely no obligation for it, of course! It would just make me a little more motivated!
 
