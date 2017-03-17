@@ -41,3 +41,8 @@ Research:
 - Adding support for non SpeedTree objects
 - Uneven terrain sizes like 3600x3900
 - Store/restore the trees from the managed terrains
+- Multiple scenes dynamically loaded that have trees as objects
+- Tree cascade distances for different max distances for different tree types. Groups should use different layers, different occlusion cameras, different distances
+- Hue variations for trees
+- Dynamically loading trees with 'Resources.Load'
+- Not force people have billboards on trees, but allow speedtrees without billboards
