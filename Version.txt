@@ -2,6 +2,7 @@ Version 0.9.2 Beta
 
 Fixes:
 - Fixed trees dissapearing when using a custom camera in the inspector
+- Fixed not generatng colliders when the terrain was not centered
 
 Version 0.9.1 Beta
 
